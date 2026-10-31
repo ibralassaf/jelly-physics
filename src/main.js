@@ -1,6 +1,6 @@
 import { buildSurfaceMesh } from './shape.js';
 import { bakeSkin, applySkin } from './skin.js';
-import { Renderer } from './render.js';
+import { Renderer, JELLY_COLORS } from './render.js';
 import { shearFromIntensity } from './sim.js';
 import { JellyAudio } from './audio.js';
 import { WobbleDetector } from './wobble.js';
@@ -148,6 +148,21 @@ try {
   $('error').hidden = false;
   throw err;
 }
+
+// Colour changes only update the optical material; the simulation and sound carry on.
+const colorButtons = [...document.querySelectorAll('[data-color]')];
+function selectColor(name) {
+  renderer.setColor(name);
+  document.documentElement.style.setProperty('--accent', JELLY_COLORS[name].accent);
+  for (const button of colorButtons) button.setAttribute('aria-pressed', String(button.dataset.color === name));
+}
+for (const button of colorButtons) {
+  button.style.setProperty('--swatch', JELLY_COLORS[button.dataset.color].accent);
+  button.addEventListener('click', () => selectColor(button.dataset.color));
+  // Space activates a focused colour button instead of the table-bump shortcut.
+  button.addEventListener('keydown', (e) => { if (e.code === 'Space') e.stopPropagation(); });
+}
+selectColor('red');
 
 const worker = new Worker('./src/worker.js', { type: 'module' });
 worker.onerror = (e) => { $('error').textContent = `Physics worker failed: ${e.message}`; $('error').hidden = false; };
