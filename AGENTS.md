@@ -7,6 +7,7 @@
 
 ## Before you push
 - Run `npm run check` and make it pass.
+- Start the app with `npm start`, tell the person at http://localhost:5173 what to try, and wait for them to confirm it looks and sounds right. Do not push before they confirm.
 - Bug fixes get a test that fails without the fix, unless the bug is purely visual.
 - Never disable a test or lint rule to get a green result. If you must suppress one, say why next to it.
 - Never commit secrets, `.env` files or personal data.
@@ -23,3 +24,4 @@
 
 ## Merging means production
 Merging to `main` publishes the site to GitHub Pages automatically. If something breaks after a merge, revert the PR.
+After opening a PR, wait for `Check` and fix the cause if it fails. Do not merge until the person tells you to.
