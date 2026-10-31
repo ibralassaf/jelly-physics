@@ -7,6 +7,8 @@ Run it by double-clicking `start.cmd`, or with `npm start` and then opening http
 
 **Controls:** click to poke, drag to pull, drag the background to orbit, scroll to zoom,
 Space to bump the table, M to mute, R to reset. The slider sets the gel's shear modulus from 6 kPa to 300 Pa.
+Choose red, blue, green, purple or gold with the colour buttons. Reset keeps the selected colour;
+reloading starts with red.
 
 ## Physics (`src/sim.js`)
 

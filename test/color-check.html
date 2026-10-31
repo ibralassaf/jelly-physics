@@ -1,0 +1,157 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>live color check</title>
+<iframe id="app" title="Jelly color integration check" style="width:1000px;height:640px;border:0"></iframe>
+<pre id="out">pending</pre>
+<script type="module">
+import { JELLY_COLORS } from '../src/render.js';
+
+// Exercise the real controls, renderer and worker together. No simulated renderer or physics.
+const report = (text) => {
+  document.getElementById('out').textContent = text;
+  if (location.search.includes('report')) fetch('/result', { method: 'POST', body: text });
+};
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const lines = [];
+let failed = 0;
+const check = (name, ok, detail = '') => {
+  lines.push(`${ok ? 'PASS' : 'FAIL'}  ${name}  ${detail}`);
+  if (!ok) failed++;
+};
+const same = (actual, expected) => actual?.length === expected.length
+  && expected.every((v, i) => Number.isFinite(actual[i]) && Math.abs(actual[i] - v) < 1e-8);
+
+let cleanup = () => {};
+try {
+  const frame = document.getElementById('app');
+  const loaded = new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  frame.src = '../index.html';
+  await loaded;
+  const win = frame.contentWindow, doc = frame.contentDocument;
+  for (let i = 0; i < 100 && !(win.__jelly && doc.getElementById('loading').hidden); i++) await wait(100);
+  const j = win.__jelly;
+  if (!j || !doc.getElementById('loading').hidden) {
+    throw new Error(`App did not become ready: ${doc.getElementById('error').textContent}`);
+  }
+
+  const names = ['red', 'blue', 'green', 'purple', 'gold'];
+  const group = doc.querySelector('[role="group"][aria-label="Jelly color"]');
+  check('accessible color group', !!group);
+  if (!group) throw new Error('No Jelly color group');
+  const buttons = Array.from(group.querySelectorAll('button[data-color]'));
+  check('all five color controls', buttons.length === names.length
+    && names.every((name) => buttons.filter((b) => b.dataset.color === name).length === 1));
+  if (buttons.length !== names.length || names.some((name) => !JELLY_COLORS[name])) {
+    throw new Error('Color controls or palette are incomplete');
+  }
+
+  const selectionMatches = (name) => {
+    const pressed = buttons.filter((b) => b.getAttribute('aria-pressed') === 'true');
+    return pressed.length === 1 && pressed[0].dataset.color === name
+      && buttons.every((b) => b.getAttribute('aria-pressed') === String(b.dataset.color === name));
+  };
+  const paletteMatches = (name) => j.renderer.color === name
+    && same(j.renderer.sigma, JELLY_COLORS[name].sigma)
+    && same(j.renderer.scatter, JELLY_COLORS[name].scatter);
+  const themeMatches = (name) => win.getComputedStyle(doc.documentElement)
+    .getPropertyValue('--accent').trim().toLowerCase() === JELLY_COLORS[name].accent.toLowerCase();
+  check('red is the default', paletteMatches('red') && selectionMatches('red') && themeMatches('red'));
+
+  // A harmless background gesture creates the audio object when the browser permits it.
+  // Suspended/unavailable audio is allowed: this test checks calls, not autoplay permission.
+  doc.body.dispatchEvent(new win.PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }));
+  doc.body.dispatchEvent(new win.PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }));
+  const audio = j.audio;
+  const sounds = ['blub', 'poke', 'grab', 'release', 'peel', 'bump', 'setMotion'];
+  const soundCalls = Object.fromEntries(sounds.map((name) => [name, 0]));
+  const originals = {};
+  if (audio) {
+    for (const name of sounds) {
+      originals[name] = audio[name];
+      audio[name] = function (...args) { soundCalls[name]++; return originals[name].apply(this, args); };
+    }
+  } else lines.push('INFO  Audio unavailable; direct sound-call checks skipped');
+
+  const outgoing = [];
+  const originalPost = j.worker.postMessage;
+  j.worker.postMessage = function (...args) { outgoing.push(args[0].t); return originalPost.apply(this, args); };
+  let frames = 0, advancing = 0, finite = true;
+  const onFrame = ({ data }) => {
+    if (data.t !== 'x') return;
+    frames++;
+    if (data.simulated > 0) advancing++;
+    if (!data.x.every(Number.isFinite) || !data.vel.every(Number.isFinite)) finite = false;
+  };
+  const errors = [];
+  const onError = (e) => errors.push(e.message || String(e.reason));
+  j.worker.addEventListener('message', onFrame);
+  win.addEventListener('error', onError);
+  win.addEventListener('unhandledrejection', onError);
+  cleanup = () => {
+    j.worker.postMessage = originalPost;
+    j.worker.removeEventListener('message', onFrame);
+    win.removeEventListener('error', onError);
+    win.removeEventListener('unhandledrejection', onError);
+    if (audio) for (const name of sounds) audio[name] = originals[name];
+  };
+
+  // A focused color button must keep Space's native activation, without bumping the table.
+  // A synthetic key does not perform that native click, so only check event routing here.
+  const keyboardOffset = outgoing.length;
+  const keyboardSounds = sounds.map((sound) => soundCalls[sound]);
+  const space = new win.KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true });
+  buttons.find((button) => button.dataset.color === 'blue').dispatchEvent(space);
+  await Promise.resolve();
+  check('Space preserves native color button activation', !space.defaultPrevented);
+  check('Space on a color button does not bump or play sound', outgoing.length === keyboardOffset
+    && (!audio || sounds.every((sound, i) => soundCalls[sound] === keyboardSounds[i])));
+
+  for (let cycle = 1; cycle <= 3; cycle++) {
+    for (const name of names) {
+      const button = buttons.find((b) => b.dataset.color === name);
+      const offset = outgoing.length;
+      const beforeSounds = sounds.map((sound) => soundCalls[sound]);
+      const beforePos = j.pos.slice();
+      button.click();
+      // Include handler microtasks without running another animation/worker task.
+      await Promise.resolve();
+      check(`cycle ${cycle}: ${name} selected`, paletteMatches(name) && selectionMatches(name) && themeMatches(name));
+      check(`cycle ${cycle}: ${name} has no control side effects`, outgoing.length === offset
+        && beforePos.every((v, i) => v === j.pos[i])
+        && (!audio || sounds.every((sound, i) => soundCalls[sound] === beforeSounds[i])));
+      await j.drive(100);
+      check(`cycle ${cycle}: ${name} leaves physics running`, outgoing.slice(offset).every((t) => t === 'frame')
+        && j.pos.length > 0 && j.pos.every(Number.isFinite) && finite);
+    }
+  }
+
+  // Reset is a physics action; the selected appearance must survive both its click and reply.
+  const resetOffset = outgoing.length;
+  const resetFrames = frames;
+  doc.getElementById('reset').click();
+  check('Reset sends a physics reset', outgoing.slice(resetOffset).filter((t) => t === 'reset').length === 1);
+  check('Reset immediately keeps gold', paletteMatches('gold') && selectionMatches('gold') && themeMatches('gold'));
+  await j.drive(400);
+  check('Reset keeps gold after physics frames', frames > resetFrames && paletteMatches('gold')
+    && selectionMatches('gold') && themeMatches('gold'));
+  check('physics remains finite and advances', finite && j.pos.length > 0 && j.pos.every(Number.isFinite)
+    && advancing > 0 && Number.isFinite(j.simRate) && j.simRate > 0,
+    `${frames} frames, ${advancing} advancing, sim rate ${j.simRate.toFixed(2)}`);
+  check('no page errors', errors.length === 0 && !doc.getElementById('error').textContent,
+    errors.join('; ') || doc.getElementById('error').textContent);
+  report(`${failed ? 'FAILED' : 'DONE'}\n${lines.join('\n')}`);
+} catch (err) {
+  report(`FAILED\n${lines.join('\n')}\nERROR: ${err && err.stack || err}`);
+} finally {
+  cleanup();
+}
+</script>
+<script>
+// Report import/load failures to the same loopback driver used by the sound checks.
+const fail = (message) => {
+  document.getElementById('out').textContent = `FAILED\nERROR: ${message}`;
+  if (location.search.includes('report')) fetch('/result', { method: 'POST', body: `FAILED\nERROR: ${message}` });
+};
+addEventListener('error', (e) => fail(e.message || 'failed to load ' + (e.target && e.target.src)), true);
+addEventListener('unhandledrejection', (e) => fail(String(e.reason)));
+</script>

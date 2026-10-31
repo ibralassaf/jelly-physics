@@ -10,6 +10,16 @@ import { PLATE } from './shape.js';
 
 const IOR = '1.34'; // Abbe-measured for dilute gelatin; F0 is about 0.021
 
+// Absorption per metre in linear RGB, with a matching ambient scattering colour.
+// The original raspberry material is kept exactly as the default.
+export const JELLY_COLORS = {
+  red:    { sigma: [3.6, 58, 42], scatter: [0.62, 0.34, 0.34], accent: '#e0344f' },
+  blue:   { sigma: [58, 22, 3.6], scatter: [0.34, 0.44, 0.72], accent: '#469eff' },
+  green:  { sigma: [48, 4.5, 36], scatter: [0.34, 0.62, 0.38], accent: '#49c785' },
+  purple: { sigma: [18, 58, 4.5], scatter: [0.53, 0.34, 0.67], accent: '#b884ed' },
+  gold:   { sigma: [3.6, 12, 58], scatter: [0.72, 0.52, 0.22], accent: '#e5b84b' },
+};
+
 const COMMON = /* glsl */`
 precision highp float;
 precision highp sampler2D;
@@ -108,12 +118,12 @@ vec3 shadeSurface(vec3 p, vec3 n, vec3 rd, vec3 albedo, float gloss, float spec)
   vec3 caustic = textureLod(uLightMap, uv, 0.8).rgb;
   float ndl = max(dot(n, L_DIR), 0.0);
   float direct = 1.0 - smoothstep(0.03, 0.92, mask);
-  // Light that scattered forward through the gel still arrives inside the shadow, stained red.
+  // Light that scattered forward through the gel still arrives inside the shadow, stained by it.
   vec3 stained = (exp(-uSigma * 0.035) * 0.42 + 0.06) * (1.0 - direct);
   vec3 lit = E_KEY * ndl * (direct + stained) + caustic * E_KEY * ndl;
   float ao = 1.0 - 0.62 * smoothstep(0.0, 0.85, aoMid) - 0.22 * smoothstep(0.0, 0.7, aoWide);
   vec3 amb = mix(vec3(0.20, 0.17, 0.15), vec3(0.60, 0.60, 0.62), n.y * 0.5 + 0.5) * ao;
-  // Red light bleeding out of the jelly into the glaze near its foot.
+  // Coloured light bleeding out of the jelly into the glaze near its foot.
   amb += exp(-uSigma * 0.03) * vec3(0.5, 0.45, 0.45) * smoothstep(0.0, 0.8, aoMid) * (1.0 - mask) * 0.25;
   vec3 col = albedo * (lit + amb) / PI;
   vec3 r = reflect(rd, n);
@@ -255,6 +265,7 @@ ${COMMON}
 in vec3 vPos; in vec3 vN;
 out vec4 o;
 uniform mat4 uVP; uniform vec3 uCam; uniform vec3 uFwd; uniform sampler2D uBack; uniform vec2 uRes;
+uniform vec3 uScatter;
 ${SCENE}
 
 // Marches the refracted ray through the depth of the far surface until it passes through it.
@@ -338,7 +349,7 @@ void main() {
   float mu = dot(inside, L_DIR);
   float phase = (1.0 - g * g) / (4.0 * PI * pow(max(1.0 + g * g - 2.0 * g * mu, 1e-3), 1.5));
   vec3 extinct = uSigma + sigmaS;
-  vec3 inscatter = sigmaS / extinct * (1.0 - exp(-extinct * d)) * (L_RAD * phase * exp(-uSigma * d * 0.45) + vec3(0.62, 0.34, 0.34) * 0.55);
+  vec3 inscatter = sigmaS / extinct * (1.0 - exp(-extinct * d)) * (L_RAD * phase * exp(-uSigma * d * 0.45) + uScatter * 0.55);
 
   vec3 c = (1.0 - F) * (transmitted * T + inscatter) + F * refl;
   o = vec4(c, 1.0);
@@ -453,7 +464,7 @@ export class Renderer {
     this.emptyVao = gl.createVertexArray();
 
     this.lightMap = this.makeTarget(1024, 1024, gl.RGBA16F, gl.HALF_FLOAT, { mips: true });
-    this.sigma = [3.6, 58, 42];   // absorption per metre (raspberry), linear RGB
+    this.setColor('red');
     this.resize();
     gl.bindVertexArray(null);
   }
@@ -507,6 +518,14 @@ export class Renderer {
 
   /** Lower resolution if the GPU can't hold frame rate. */
   setScale(s) { this.scale = s; this.resize(); }
+
+  setColor(name) {
+    if (!Object.hasOwn(JELLY_COLORS, name)) throw new RangeError(`Unknown jelly colour: ${name}`);
+    const color = JELLY_COLORS[name];
+    this.color = name;
+    this.sigma = color.sigma.slice();
+    this.scatter = color.scatter.slice();
+  }
 
   updateMesh(pos, normal) {
     const gl = this.gl;
@@ -605,6 +624,7 @@ export class Renderer {
     const jp = this.jelly;
     jp.use();
     this.bindSceneUniforms(jp, cam);
+    gl.uniform3fv(jp.u('uScatter'), this.scatter);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.backT.tex);
     gl.uniform1i(jp.u('uBack'), 2);
