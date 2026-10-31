@@ -1,0 +1,9 @@
+{
+  "name": "jelly-physics",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node test/validate.mjs"
+  }
+}
