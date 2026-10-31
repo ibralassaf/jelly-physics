@@ -3,16 +3,15 @@
 You don't need to know CI/CD. Your AI does the work.
 
 1. Ask your AI for the change.
-2. Ask it to push and open a PR.
-3. Wait for the green `Check`.
-4. Merge. Your change goes live on GitHub Pages automatically. There is no automatic rollback, so if it breaks the site, revert the PR.
+2. Try it at http://localhost:5173 when your AI starts the app, and tell it whether it looks and sounds right.
+3. Once you confirm, your AI pushes and opens a PR. Wait for the green `Check`.
+4. Tell your AI to merge. Your change goes live on GitHub Pages automatically. There is no automatic rollback, so if it breaks the site, revert the PR.
 
 ## Copy and paste for your AI
 
 **Making a change:**
 
-> Read `AGENTS.md` first. Create a new branch and make this change: [what you want]. Run `npm run check` and fix
-> anything it finds. Then push and open a pull request.
+> Read `AGENTS.md` first and follow it. Make this change: [what you want].
 
 **When the check is red:**
 
