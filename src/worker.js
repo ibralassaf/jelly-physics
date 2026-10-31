@@ -1,19 +1,38 @@
 // Physics runs here so rendering and input never block a substep.
 import { buildTetMesh } from './tetmesh.js';
 import { Jelly, shearFromIntensity } from './sim.js';
+import { H } from './shape.js';
 
 const mesh = buildTetMesh();
 const jelly = new Jelly(mesh, { shear: shearFromIntensity(0.55) });
+// The top of the jelly is what the sound listens to. Its speed comes from how far it moved across
+// the frame, not from instantaneous velocities: those carry high-frequency solver noise of several
+// mm/s while the body is visibly still, which would play as constant faint blubbing.
+const topNodes = [];
+for (let i = 0; i < jelly.n; i++) if (jelly.rest[i * 3 + 1] > H * 0.75) topNodes.push(i * 3);
+let peelsSent = 0;
+let lastTop = null;
 let debt = 0;
 let pokeUntil = 0;
 
 function publish(busyMs, simulated) {
   const x = new Float32Array(jelly.n * 3);
   for (let i = 0; i < x.length; i++) x[i] = jelly.x[i];
+  let tx = 0, ty = 0, tz = 0;
+  for (const i of topNodes) { tx += jelly.x[i]; ty += jelly.x[i + 1]; tz += jelly.x[i + 2]; }
+  const c = 1 / topNodes.length;
+  const top = [tx * c, ty * c, tz * c];
+  const vel = lastTop && simulated > 0
+    ? [(top[0] - lastTop[0]) / simulated, (top[1] - lastTop[1]) / simulated, (top[2] - lastTop[2]) / simulated]
+    : [0, 0, 0];
+  if (simulated > 0) lastTop = top;
   postMessage({
     t: 'x', x, busyMs, simulated,
-    force: jelly.grab ? jelly.grab.force : 0,
+    vel,
+    tension: jelly.grab ? jelly.grab.force / jelly.grab.maxForce : 0,
+    peels: jelly.peelCount - peelsSent,
   }, [x.buffer]);
+  peelsSent = jelly.peelCount;
 }
 
 postMessage({

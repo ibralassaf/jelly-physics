@@ -3,6 +3,7 @@
 import { buildTetMesh } from '../src/tetmesh.js';
 import { Jelly, shearFromIntensity } from '../src/sim.js';
 import { H } from '../src/shape.js';
+import { WobbleDetector } from '../src/wobble.js';
 
 const mesh = buildTetMesh();
 const fails = [];
@@ -166,6 +167,56 @@ for (const s of [0, 1]) {
   let maxD = 0;
   for (let i = 0; i < n; i++) maxD = Math.max(maxD, Math.hypot(j.x[i * 3] - a[i * 3], j.x[i * 3 + 1] - a[i * 3 + 1], j.x[i * 3 + 2] - a[i * 3 + 2]));
   check(`rest jitter s=${s}`, maxD < 2e-4, `${(maxD * 1e6).toFixed(0)} um per frame at worst node`);
+}
+
+// Sound: one event per real oscillation, fading with the ring-down, and silence at rest.
+// Speed is measured the way src/worker.js does it, from movement across each 60 Hz frame.
+for (const s of [0, 0.25, 0.5, 0.55, 0.75, 1]) {
+  const G = shearFromIntensity(s);
+  const j = settle(new Jelly(mesh, { shear: G }), 9);
+  const det = new WobbleDetector();
+  const dt = 1 / 60;
+  const topMean = () => {
+    const p = [0, 0, 0];
+    for (const i of topNodes) { p[0] += j.x[i * 3]; p[1] += j.x[i * 3 + 1]; p[2] += j.x[i * 3 + 2]; }
+    return p.map((c) => c / topNodes.length);
+  };
+  let last = topMean();
+  let maxSpeed = 0;
+  const run = (seconds) => {
+    const levels = [];
+    maxSpeed = 0;
+    for (let t = 0; t < seconds; t += dt) {
+      j.step(dt);
+      const now = topMean();
+      const v = [(now[0] - last[0]) / dt, (now[1] - last[1]) / dt, (now[2] - last[2]) / dt];
+      last = now;
+      maxSpeed = Math.max(maxSpeed, Math.hypot(v[0], v[1], v[2]));
+      const level = det.update(v, dt, G);
+      if (level > 0) levels.push(level);
+    }
+    return levels;
+  };
+  const peels0 = j.peelCount;
+  const idle = run(3);
+  check(`sound silent at rest s=${s}`, idle.length === 0 && j.peelCount === peels0 && maxSpeed < 0.002, `${idle.length} blubs, ${j.peelCount - peels0} peels in 3 s; top speed ${(maxSpeed * 1000).toFixed(3)} mm/s vs 4 mm/s threshold`);
+  j.startBump(0);
+  const ring = run(1.5);
+  const expected = 0.098 * Math.sqrt(G) * 1.5;
+  check(`sound tracks wobble s=${s}`, ring.length >= expected * 0.55 && ring.length <= expected * 1.45, `${ring.length} blubs in 1.5 s, oscillation predicts ${expected.toFixed(1)}; levels ${ring.map((l) => l.toFixed(2)).join(' ')}`);
+  const later = run(6);
+  const tail = run(3);
+  check(`sound dies away s=${s}`, tail.length === 0, `${later.length} more blubs, then ${tail.length} in the last 3 s`);
+}
+// Pulling hard enough must actually peel the base, or the sticky ticks would never play.
+{
+  const j = settle(new Jelly(mesh, { shear: shearFromIntensity(0.5) }), 3);
+  let top = 0; for (let i = 0; i < n; i++) if (j.x[i * 3 + 1] > j.x[top * 3 + 1]) top = i;
+  const before = j.peelCount;
+  j.startGrab([j.x[top * 3], j.x[top * 3 + 1], j.x[top * 3 + 2]]);
+  j.moveGrab([0.12, 0.16, 0]);
+  j.step(0.8);
+  check('hard pull peels the base', j.peelCount > before, `${j.peelCount - before} bonds broken`);
 }
 
 // Throughput, the number that decides whether real time is possible.

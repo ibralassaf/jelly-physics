@@ -6,7 +6,7 @@ Run it by double-clicking `start.cmd`, or with `npm start` and then opening http
 `npm test` runs the physics checks headless.
 
 **Controls:** click to poke, drag to pull, drag the background to orbit, scroll to zoom,
-Space to bump the table, R to reset. The slider sets the gel's shear modulus from 6 kPa to 300 Pa.
+Space to bump the table, M to mute, R to reset. The slider sets the gel's shear modulus from 6 kPa to 300 Pa.
 
 ## Physics (`src/sim.js`)
 
@@ -22,6 +22,17 @@ Space to bump the table, R to reset. The slider sets the gel's shear modulus fro
 Refraction through both surfaces at n = 1.34, Beer-Lambert absorption, Fresnel reflection, one
 internal bounce, forward scattering, and energy-conserving caustics on the plate. The smooth display
 mesh follows the simulation through moving least squares, so the tet cage never shows in highlights.
+
+## Sound (`src/audio.js`, `src/wobble.js`)
+
+All sound is synthesized live with Web Audio and driven by the simulation, with no audio files. Each
+real oscillation of the jelly's top plays one bubble-like "blub", so the rhythm is the true wobble
+frequency, the pitch falls as the gel softens, and the level follows the ring-down. Bonds peeling off
+the plate make sticky ticks. Grabbing, releasing, poking and bumping the table each have their own sound.
+
+Checks: `npm test` covers when sounds trigger, and `node test/render-audio.mjs` renders levels in a
+headless browser (add `live-check` to run the real page end to end). None of this can judge how a
+sound feels, so tune the numbers in `audio.js` by ear.
 
 ## Known limits
 

@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>audio render</title>
+<pre id="out">pending</pre>
+<script type="module">
+// Renders each sound offline in a real browser and reports levels. Open it from the local server,
+// or run a headless browser with --dump-dom against /test/audio-render.html.
+import { JellyAudio } from '../src/audio.js';
+
+const RATE = 48000;
+const measure = (data, from, to) => {
+  let peak = 0, sum = 0;
+  const a = Math.floor(from * RATE), b = Math.min(Math.floor(to * RATE), data.length);
+  for (let i = a; i < b; i++) { const v = Math.abs(data[i]); peak = Math.max(peak, v); sum += v * v; }
+  return { peak, rms: Math.sqrt(sum / Math.max(b - a, 1)) };
+};
+async function render(seconds, play) {
+  const ctx = new OfflineAudioContext(2, seconds * RATE, RATE);
+  play(new JellyAudio(ctx));
+  const buf = await ctx.startRendering();
+  return buf.getChannelData(0);
+}
+const db = (v) => (v > 0 ? (20 * Math.log10(v)).toFixed(1) : '-inf');
+const lines = [];
+const G = 1200;
+const cases = {
+  'blub level .3': (a) => a.blub(0.3, G, 0.02),
+  'blub full': (a) => a.blub(1, G, 0.02),
+  'blub firm gel': (a) => a.blub(1, 6000, 0.02),
+  'blub soft gel': (a) => a.blub(1, 300, 0.02),
+  poke: (a) => a.poke(G, 0.02),
+  grab: (a) => a.grab(0.02),
+  'release weak': (a) => a.release(0.1, G, 0.02),
+  'release strong': (a) => a.release(1, G, 0.02),
+  peel: (a) => a.peel(5, 0.02),
+  bump: (a) => a.bump(0.02),
+};
+for (const [name, play] of Object.entries(cases)) {
+  const d = await render(1.2, play);
+  const m = measure(d, 0, 1.2);
+  const tail = measure(d, 1.0, 1.2);
+  lines.push(`${name.padEnd(20)} peak ${db(m.peak).padStart(6)} dB   tail ${db(tail.peak).padStart(6)} dB`);
+}
+// Worst case: everything at once, with continuous motion at maximum.
+const worst = await render(1.5, (a) => {
+  a.setMotion(1, 1, G, 0.01);
+  a.bump(0.1); a.poke(G, 0.1); a.release(1, G, 0.1); a.blub(1, G, 0.1); a.blub(1, G, 0.12);
+});
+lines.push(`${'all at once'.padEnd(20)} peak ${db(measure(worst, 0, 1.5).peak).padStart(6)} dB`);
+// Idle must be silent: no motion, no events.
+const idle = await render(1, (a) => a.setMotion(0, 0, G, 0));
+lines.push(`${'idle'.padEnd(20)} peak ${db(measure(idle, 0.2, 1).peak).padStart(6)} dB`);
+// Muted must also silence a hit that plays afterwards.
+const muted = await render(1, (a) => { a.master.gain.value = 0; a.bump(0.1); });
+lines.push(`${'muted bump'.padEnd(20)} peak ${db(measure(muted, 0, 1).peak).padStart(6)} dB`);
+const report = (text) => {
+  document.getElementById('out').textContent = text;
+  if (location.search.includes('report')) fetch('/result', { method: 'POST', body: text });
+};
+report('DONE\n' + lines.join('\n'));
+</script>
+<script>
+// Module load failures and thrown errors must reach the driver too, not just a console nobody reads.
+const fail = (m) => { if (location.search.includes('report')) fetch('/result', { method: 'POST', body: 'ERROR: ' + m }); };
+addEventListener('error', (e) => fail(e.message || 'failed to load ' + (e.target && e.target.src)), true);
+addEventListener('unhandledrejection', (e) => fail(String(e.reason)));
+</script>

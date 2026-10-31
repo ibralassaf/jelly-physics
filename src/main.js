@@ -2,6 +2,8 @@ import { buildSurfaceMesh } from './shape.js';
 import { bakeSkin, applySkin } from './skin.js';
 import { Renderer } from './render.js';
 import { shearFromIntensity } from './sim.js';
+import { JellyAudio } from './audio.js';
+import { WobbleDetector } from './wobble.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
@@ -88,6 +90,52 @@ function pointerRay(e) {
   return { o: cam.pos, d };
 }
 
+// ---- sound ----------------------------------------------------------------
+// Browsers only allow audio after a user gesture, so it starts on the first input.
+let audio = null;
+let muted = localStorage.getItem('jelly-muted') === '1';
+let currentG = shearFromIntensity(0.55);
+let tension = 0;
+const wobble = new WobbleDetector();
+
+function unlockAudio() {
+  if (audio) { if (!document.hidden) audio.ctx.resume(); return; }
+  // Sound is a bonus: if it can't start, the simulation carries on silently.
+  try {
+    audio = new JellyAudio(new AudioContext({ latencyHint: 'interactive' }));
+    audio.setMuted(muted);
+    audio.ctx.resume();
+  } catch (err) {
+    console.warn('Audio unavailable:', err);
+    $('sound').hidden = true;
+  }
+}
+window.addEventListener('pointerdown', unlockAudio, { capture: true });
+window.addEventListener('keydown', unlockAudio, { capture: true });
+// A hidden tab gets no physics frames, so the last motion level would otherwise hold forever.
+document.addEventListener('visibilitychange', () => {
+  if (!audio) return;
+  if (document.hidden) audio.ctx.suspend(); else audio.ctx.resume();
+});
+
+function showMute() {
+  $('sound').textContent = muted ? 'Sound off' : 'Sound on';
+  $('sound').setAttribute('aria-pressed', String(!muted));
+}
+function toggleMute() {
+  muted = !muted;
+  localStorage.setItem('jelly-muted', muted ? '1' : '0');
+  audio?.setMuted(muted);
+  showMute();
+}
+showMute();
+$('sound').addEventListener('click', toggleMute);
+
+function bumpTable() {
+  worker.postMessage({ t: 'bump' });
+  audio?.bump();
+}
+
 // ---- setup ----------------------------------------------------------------
 const surface = buildSurfaceMesh();
 const pos = new Float32Array(surface.positions.length);
@@ -124,6 +172,13 @@ worker.onmessage = ({ data: d }) => {
     loadAvg += (d.busyMs - loadAvg) * 0.05;
     if (lastDt > 0) simRate += (Math.min(d.simulated / lastDt, 1) - simRate) * 0.05;
     meshDirty = true;
+    tension = d.tension;
+    const level = wobble.update(d.vel, Math.max(lastDt, 1 / 240), currentG);
+    if (audio) {
+      if (level > 0) audio.blub(level, currentG);
+      audio.setMotion(Math.hypot(d.vel[0], d.vel[1], d.vel[2]), d.tension, currentG);
+      audio.peel(d.peels);
+    }
   }
 };
 let meshDirty = false;
@@ -134,6 +189,7 @@ const slider = $('intensity');
 function pushSlider() {
   const s = slider.value / 100;
   const G = shearFromIntensity(s);
+  currentG = G;
   worker.postMessage({ t: 'shear', s });
   $('modulus').textContent = G >= 1000 ? `${(G / 1000).toFixed(1)} kPa` : `${G.toFixed(0)} Pa`;
   // f = 0.098 sqrt(G) is the fit to the ring-down measured in test/validate.mjs.
@@ -141,10 +197,11 @@ function pushSlider() {
   slider.style.setProperty('--p', `${slider.value}%`);
 }
 slider.addEventListener('input', pushSlider);
-$('bump').addEventListener('click', () => worker.postMessage({ t: 'bump' }));
+$('bump').addEventListener('click', bumpTable);
 $('reset').addEventListener('click', () => worker.postMessage({ t: 'reset' }));
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space') { e.preventDefault(); worker.postMessage({ t: 'bump' }); }
+  if (e.code === 'Space') { e.preventDefault(); bumpTable(); }
+  if (e.key === 'm' || e.key === 'M') toggleMute();
   if (e.key === 'r' || e.key === 'R') worker.postMessage({ t: 'reset' });
 });
 
@@ -213,6 +270,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (!drag.grabbed && moved > CLICK_PX) {
     drag.grabbed = true;
     worker.postMessage({ t: 'grab', p: drag.hit, radius: 0.024 });
+    audio?.grab();
   }
   if (drag.grabbed) {
     // Slide the handle on the camera-facing plane through the original hit.
@@ -232,9 +290,13 @@ let lastHover = 0;
 function endDrag(e) {
   if (!drag) return;
   if (drag.kind === 'jelly') {
-    if (drag.grabbed) worker.postMessage({ t: 'release' });
+    if (drag.grabbed) {
+      worker.postMessage({ t: 'release' });
+      audio?.release(tension, currentG);
+    }
     else if (performance.now() - drag.t0 < 600 && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) <= CLICK_PX) {
       worker.postMessage({ t: 'poke', p: drag.hit, dir: drag.dir });
+      audio?.poke(currentG);
     }
   }
   drag = null;
@@ -294,4 +356,4 @@ const drive = (ms) => new Promise((done) => {
     if (performance.now() - t0 > ms) { clearInterval(id); done(); }
   }, 16);
 });
-window.__jelly = { worker, orbit, renderer, drive, get pos() { return pos; }, get fps() { return fpsAvg; }, get load() { return loadAvg; }, get simRate() { return simRate; }, get scale() { return renderer.scale; } };
+window.__jelly = { worker, orbit, renderer, drive, get audio() { return audio; }, get pos() { return pos; }, get fps() { return fpsAvg; }, get load() { return loadAvg; }, get simRate() { return simRate; }, get scale() { return renderer.scale; } };
