@@ -57,6 +57,7 @@ export class Jelly {
     this.lamH = new Float64Array(m);
     this.bonded = new Uint8Array(n);
     this.isBase = new Uint8Array(n);
+    this.peelCount = 0;                    // bonds broken so far, which drives the sticky sound
     this.bondAge = new Float32Array(n);
     this.badList = new Int32Array(m);
     this.badCount = 0;
@@ -427,7 +428,7 @@ export class Jelly {
       if (gap > 0) {
         if (bonded[i]) {
           // Adhesive tension: tries to keep the bond closed, peels if it can't.
-          if (gap * this.mass[i] > adhT) { bonded[i] = 0; bondAge[i] = 0; }
+          if (gap * this.mass[i] > adhT) { bonded[i] = 0; bondAge[i] = 0; this.peelCount++; }
           else x[i3 + 1] -= gap;
         } else bondAge[i] = 0;
         if (gap > 2e-4) continue;
@@ -461,6 +462,7 @@ export class Jelly {
         }
       } else {
         // Slipping: the bond is gone and only dynamic Coulomb friction remains.
+        if (bonded[i]) this.peelCount++;
         bonded[i] = 0; bondAge[i] = 0;
         const f = Math.min((P.muDynamic * lamN + slideY) / lamT, 1);
         x[i3] -= tx * f; x[i3 + 1] -= ty * f; x[i3 + 2] -= tz * f;
